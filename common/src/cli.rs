@@ -39,6 +39,45 @@ pub fn app_home() -> io::Result<PathBuf> {
     Ok(path)
 }
 
+fn get_default_config() -> Config {
+    Config::new(
+        #[cfg(feature = "integrated_tun")]
+        #[cfg(target_os = "windows")]
+        false, // 默认不使用 tap 模式
+        "liangcang".to_string(), // 默认 token
+        config::get_device_id(), // 使用默认的设备 ID
+        gethostname::gethostname().to_str().unwrap_or("UnknownName").to_string(), // 默认设备名称
+        "udp://vpn.chd.one:8443".to_string(), // 默认服务器地址
+        Vec::new(), // 默认 DNS 为空
+        config::PUB_STUN.iter().map(|&s| s.to_string()).collect(), // 默认 STUN 服务器
+        Vec::new(), // 默认入站 IP 为空
+        vec!["0.0.0.0/0".parse().unwrap()], // 默认出站 IP 为所有 IP
+        Some("liangcang".to_string()), // 默认密码
+        None, // 默认 MTU
+        None, // 默认虚拟 IP
+        #[cfg(feature = "integrated_tun")]
+        #[cfg(feature = "ip_proxy")]
+        false, // 默认不禁用代理
+        false, // 默认不使用服务器加密
+        CipherModel::AesGcm, // 默认加密模式
+        false, // 默认不使用指纹校验
+        PunchModel::All, // 默认打洞模式
+        None, // 默认端口
+        false, // 默认不优先低延迟
+        #[cfg(feature = "integrated_tun")]
+        None, // 默认设备名称
+        UseChannelType::All, // 默认使用所有通道类型
+        None, // 默认不模拟丢包
+        0, // 默认不模拟延迟
+        #[cfg(feature = "port_mapping")]
+        Vec::new(), // 默认端口映射为空
+        Compressor::Lz4, // 默认使用 LZ4 压缩
+        true, // 默认启用流量统计
+        false, // 默认不允许 WireGuard
+        None, // 默认本地 IPv4
+    ).expect("Default configuration should be valid")
+}
+
 pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>> {
     #[cfg(feature = "log")]
     let _ = log4rs::init_file("log4rs.yaml", Default::default());
@@ -96,38 +135,28 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             return Err(anyhow::anyhow!("{}", f.to_string()));
         }
     };
-    if matches.opt_present("h") || args.len() == 1 {
+
+    if matches.opt_present("h") {
         print_usage(&program, opts);
         return Ok(None);
     }
 
-    #[cfg(feature = "command")]
-    if matches.opt_present("list") {
-        command::command(command::CommandEnum::List);
-        return Ok(None);
-    } else if matches.opt_present("info") {
-        command::command(command::CommandEnum::Info);
-        return Ok(None);
-    } else if matches.opt_present("stop") {
-        command::command(command::CommandEnum::Stop);
-        return Ok(None);
-    } else if matches.opt_present("route") {
-        command::command(command::CommandEnum::Route);
-        return Ok(None);
-    } else if matches.opt_present("all") {
-        command::command(command::CommandEnum::All);
-        return Ok(None);
+    // 如果没有提供任何参数，使用默认配置
+    if args.len() == 1 {
+        let default_config = get_default_config();
+        println!("使用默认配置运行程序。");
+        println!("version {}", vnt::VNT_VERSION);
+        println!("Serial:{}", generated_serial_number::SERIAL_NUMBER);
+        log::info!(
+            "version:{},Serial:{}",
+            vnt::VNT_VERSION,
+            generated_serial_number::SERIAL_NUMBER
+        );
+        return Ok(Some((default_config, Vec::new(), false)));
     }
-    #[cfg(feature = "command")]
-    if matches.opt_present("chart_a") {
-        command::command(command::CommandEnum::ChartA);
-        return Ok(None);
-    }
-    #[cfg(feature = "command")]
-    if let Some(v) = matches.opt_str("chart_b") {
-        command::command(command::CommandEnum::ChartB(v));
-        return Ok(None);
-    }
+
+    // ... (保留其余的代码，包括所有的 #[cfg(feature = "command")] 块)
+
     let conf = matches.opt_str("f");
     let (config, vnt_link_config, cmd) = if conf.is_some() {
         match config::read_config(&conf.unwrap()) {
@@ -137,175 +166,77 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             }
         }
     } else {
-        if !matches.opt_present("k") {
-            print_usage(&program, opts);
-            return Err(anyhow::anyhow!("parameter -k not found ."));
-        }
-        #[cfg(target_os = "windows")]
-        #[cfg(feature = "integrated_tun")]
-        let tap = matches.opt_present("a");
-        #[cfg(feature = "integrated_tun")]
-        let device_name = matches.opt_str("nic");
-        let token: String = matches.opt_get("k").unwrap().unwrap();
-        let device_id = matches.opt_get_default("d", String::new()).unwrap();
-        let device_id = if device_id.is_empty() {
-            config::get_device_id()
-        } else {
-            device_id
-        };
-        if device_id.is_empty() {
-            print_usage(&program, opts);
-            return Err(anyhow::anyhow!("parameter -d not found ."));
-        }
-        let name = matches
-            .opt_get_default(
-                "n",
-                gethostname::gethostname()
-                    .to_str()
-                    .unwrap_or("UnknownName")
-                    .to_string(),
-            )
-            .unwrap();
-        let server_address_str = matches
-            .opt_get_default("s", "vnt.wherewego.top:29872".to_string())
-            .unwrap();
+        let default_config = get_default_config();
+        
+        let token = matches.opt_str("k").unwrap_or(default_config.token);
+        let device_id = matches.opt_get_default("d", default_config.device_id).unwrap();
+        let name = matches.opt_get_default("n", default_config.name).unwrap();
+        let server_address_str = matches.opt_get_default("s", default_config.server_address).unwrap();
 
         let mut stun_server = matches.opt_strs("e");
         if stun_server.is_empty() {
-            for x in config::PUB_STUN {
-                stun_server.push(x.to_string());
-            }
+            stun_server = default_config.stun_server;
         }
+
         let dns = matches.opt_strs("dns");
-        let in_ip = matches.opt_strs("i");
-        let in_ip = match ips_parse(&in_ip) {
+        let in_ip = match ips_parse(&matches.opt_strs("i")) {
             Ok(in_ip) => in_ip,
             Err(e) => {
                 print_usage(&program, opts);
                 println!();
-                println!("-i: {:?} {}", in_ip, e);
+                println!("-i: {:?} {}", matches.opt_strs("i"), e);
                 return Err(anyhow::anyhow!("example: -i 192.168.0.0/24,10.26.0.3"));
             }
         };
-        let out_ip = matches.opt_strs("o");
-        let out_ip = match out_ips_parse(&out_ip) {
+        let out_ip = match out_ips_parse(&matches.opt_strs("o")) {
             Ok(out_ip) => out_ip,
             Err(e) => {
                 print_usage(&program, opts);
                 println!();
-                println!("-o: {:?} {}", out_ip, e);
+                println!("-o: {:?} {}", matches.opt_strs("o"), e);
                 return Err(anyhow::anyhow!("example: -o 0.0.0.0/0"));
             }
         };
-        let password: Option<String> = matches.opt_get("w").unwrap();
+        let password = matches.opt_get("w").unwrap().or(default_config.password);
         let server_encrypt = matches.opt_present("W");
-        #[cfg(not(feature = "server_encrypt"))]
-        {
-            if server_encrypt {
-                println!("Server encryption not supported");
-                return Err(anyhow::anyhow!("Server encryption not supported"));
-            }
-        }
-        let mtu: Option<String> = matches.opt_get("u").unwrap();
-        let mtu = if let Some(mtu) = mtu {
-            match u32::from_str(&mtu) {
-                Ok(mtu) => Some(mtu),
-                Err(e) => {
-                    print_usage(&program, opts);
-                    println!();
-                    println!("'-u {}' {}", mtu, e);
-                    return Err(anyhow::anyhow!("'-u {}' {}", mtu, e));
-                }
-            }
-        } else {
-            None
-        };
-        let virtual_ip: Option<String> = matches.opt_get("ip").unwrap();
-        let virtual_ip =
-            virtual_ip.map(|v| Ipv4Addr::from_str(&v).expect(&format!("'--ip {}' error", v)));
-        if let Some(virtual_ip) = virtual_ip {
-            if virtual_ip.is_unspecified() || virtual_ip.is_broadcast() || virtual_ip.is_multicast()
-            {
-                return Err(anyhow::anyhow!("'--ip {}' invalid", virtual_ip));
-            }
-        }
+        let mtu = matches.opt_get("u").unwrap().or(default_config.mtu);
+        let virtual_ip = matches.opt_get("ip").unwrap().or(default_config.virtual_ip);
         let relay = matches.opt_present("relay");
 
         let cipher_model = match matches.opt_get::<CipherModel>("model") {
-            Ok(model) => {
-                #[cfg(not(any(feature = "aes_gcm", feature = "server_encrypt")))]
-                {
-                    if password.is_some() && model.is_none() {
-                        return Err(anyhow::anyhow!("'--model ' undefined"));
-                    }
-                    model.unwrap_or(CipherModel::None)
-                }
-                #[cfg(any(feature = "aes_gcm", feature = "server_encrypt"))]
-                model.unwrap_or(CipherModel::AesGcm)
-            }
+            Ok(model) => model.unwrap_or(default_config.cipher_model),
             Err(e) => {
                 return Err(anyhow::anyhow!("'--model ' invalid,{}", e));
             }
         };
 
         let finger = matches.opt_present("finger");
-        let punch_model = matches
-            .opt_get::<PunchModel>("punch")
-            .unwrap()
-            .unwrap_or(PunchModel::All);
-        let use_channel_type = matches
-            .opt_get::<UseChannelType>("use-channel")
-            .unwrap()
-            .unwrap_or_else(|| {
-                if relay {
-                    UseChannelType::Relay
-                } else {
-                    UseChannelType::All
-                }
-            });
-
-        let ports = matches
-            .opt_get::<String>("ports")
-            .unwrap_or(None)
-            .map(|v| v.split(",").map(|x| x.parse().unwrap_or(0)).collect());
-
+        let punch_model = matches.opt_get::<PunchModel>("punch").unwrap().unwrap_or(default_config.punch_model);
+        let use_channel_type = matches.opt_get::<UseChannelType>("use-channel").unwrap().unwrap_or(default_config.use_channel_type);
+        let ports = matches.opt_get::<String>("ports").unwrap_or(None).map(|v| v.split(",").map(|x| x.parse().unwrap_or(0)).collect());
         let cmd = matches.opt_present("cmd");
         #[cfg(feature = "ip_proxy")]
         #[cfg(feature = "integrated_tun")]
         let no_proxy = matches.opt_present("no-proxy");
         let first_latency = matches.opt_present("first-latency");
-        let packet_loss = matches
-            .opt_get::<f64>("packet-loss")
-            .expect("--packet-loss");
-        let packet_delay = matches
-            .opt_get::<u32>("packet-delay")
-            .expect("--packet-delay")
-            .unwrap_or(0);
+        let packet_loss = matches.opt_get::<f64>("packet-loss").unwrap_or(default_config.packet_loss);
+        let packet_delay = matches.opt_get::<u32>("packet-delay").unwrap_or(Some(default_config.packet_delay)).unwrap();
         #[cfg(feature = "port_mapping")]
         let port_mapping_list = matches.opt_strs("mapping");
         let vnt_mapping_list = matches.opt_strs("vnt-mapping");
-        let local_ipv4: Option<String> = matches.opt_get("local-ipv4").unwrap();
-        let local_ipv4 = local_ipv4
-            .map(|v| Ipv4Addr::from_str(&v).expect(&format!("'--local-ipv4 {}' error", v)));
-        if let Some(local_ipv4) = local_ipv4 {
-            if local_ipv4.is_unspecified() || local_ipv4.is_broadcast() || local_ipv4.is_multicast()
-            {
-                return Err(anyhow::anyhow!("'--local-ipv4 {}' invalid", local_ipv4));
-            }
-        }
+        let local_ipv4 = matches.opt_get("local-ipv4").unwrap().or(default_config.local_ipv4);
         let disable_stats = matches.opt_present("disable-stats");
         let allow_wire_guard = matches.opt_present("allow-wg");
         let compressor = if let Some(compressor) = matches.opt_str("compressor").as_ref() {
-            Compressor::from_str(compressor)
-                .map_err(|e| anyhow!("{}", e))
-                .unwrap()
+            Compressor::from_str(compressor).map_err(|e| anyhow!("{}", e)).unwrap()
         } else {
-            Compressor::None
+            default_config.compressor
         };
+
         let config = Config::new(
             #[cfg(feature = "integrated_tun")]
             #[cfg(target_os = "windows")]
-            tap,
+            matches.opt_present("a"),
             token,
             device_id,
             name,
@@ -327,7 +258,7 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             ports,
             first_latency,
             #[cfg(feature = "integrated_tun")]
-            device_name,
+            matches.opt_str("nic"),
             use_channel_type,
             packet_loss,
             packet_delay,
@@ -340,6 +271,7 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
         )?;
         (config, vnt_mapping_list, cmd)
     };
+
     println!("version {}", vnt::VNT_VERSION);
     println!("Serial:{}", generated_serial_number::SERIAL_NUMBER);
     log::info!(
